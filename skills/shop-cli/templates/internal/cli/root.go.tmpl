@@ -1,0 +1,64 @@
+package cli
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"{{.Module}}/internal/config"
+)
+
+// NewRoot builds the root command. The structure is fixed:
+//   - PersistentFlags: --json, --config, --max, --lang, --verbose
+//   - PersistentPreRunE: validate flags, inject into ctx, seed rt holder.
+//   - PersistentPostRunE: persist session if the client marked it dirty.
+//   - AddCommand(...): the ONLY block agents edit when adding commands
+//     (additive only — see shop-cli-skill/references/conventions.md).
+func NewRoot(version string) *cobra.Command {
+	root := &cobra.Command{
+		Use:           "{{.Name}}",
+		Short:         "Unofficial CLI for {{.Store}}",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Version:       version,
+	}
+	flags := &Flags{}
+	root.PersistentFlags().BoolVar(&flags.Json, "json", false, "machine-readable JSON on stdout")
+	root.PersistentFlags().StringVar(&flags.Config, "config", "", "path to config.json (default ~/.{{.Name}}/config.json)")
+	root.PersistentFlags().Float64Var(&flags.Max, "max", 0, "spending guard: refuse cart mutations over <eur> (env {{.Upper}}_MAX_EUR)")
+	root.PersistentFlags().StringVar(&flags.Lang, "lang", "", "language override (es|ca)")
+	root.PersistentFlags().BoolVarP(&flags.Verbose, "verbose", "v", false, "diagnostics on stderr")
+
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if flags.Max < 0 {
+			return fmt.Errorf("--max must be >= 0 (got %.2f); use 0 to disable the guard", flags.Max)
+		}
+		if flags.Lang != "" && !config.ValidLang(flags.Lang) {
+			return fmt.Errorf("--lang must be one of: es, ca (got %q)", flags.Lang)
+		}
+		// Inject flags + seed the rt holder so ctxValue can memoize per-invocation.
+		ctx := WithFlags(cmd.Context(), flags)
+		ctx = bindRT(ctx)
+		cmd.SetContext(ctx)
+		return nil
+	}
+	root.PersistentPostRunE = func(cmd *cobra.Command, args []string) error {
+		rt := ctxValue(cmd.Context())
+		if rt.client != nil && rt.client.SyncSession() && rt.sessionPath != "" {
+			return config.SaveSession(rt.sess)
+		}
+		return nil
+	}
+
+	// === AddCommand block — agents add ONE line per new command here. ===
+	// Do NOT rewrite this block; only add lines. See AGENTS.md rule #3.
+	root.AddCommand(
+		newSearchCmd(),
+		newWhoamiCmd(),
+		// newProductCmd(),
+		// newCartCmd(),
+		// newLoginCmd(),
+		// newLogoutCmd(),
+	)
+	return root
+}

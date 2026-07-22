@@ -1,0 +1,150 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+
+	"{{.Module}}/internal/api"
+	"{{.Module}}/internal/auth"
+	"{{.Module}}/internal/client"
+	"{{.Module}}/internal/config"
+)
+
+// runtime is the per-invocation constructed state, memoized in ctx.
+// Constructed once by ctxValue on the first command's RunE; reused thereafter.
+type runtime struct {
+	client      *client.Client
+	sess        *config.Session
+	cfg         *config.Config
+	flags       *Flags
+	json        bool
+	verbose     bool
+	log         func(format string, args ...any)
+	sessionPath string
+}
+
+// ctxValue returns the memoized runtime, constructing it on first call.
+func ctxValue(ctx context.Context) runtime {
+	h := holderFrom(ctx)
+	if h.rt != nil {
+		return *h.rt
+	}
+	flags := flagsFrom(ctx)
+	if flags == nil {
+		flags = &Flags{}
+	}
+
+	sess, err := config.LoadSession()
+	if err != nil {
+		sess = &config.Session{}
+	}
+	logger := newLogger(flags.Verbose)
+	c := client.New(sess, logger)
+	cfg, err := config.LoadConfigFrom(flags.Config)
+	if err != nil {
+		cfg = &config.Config{}
+	}
+
+	// Overlay env-sourced account token. NEVER written to disk (envSourced flag).
+	overlayEnvToken(sess)
+
+	rt := runtime{
+		client:      c,
+		sess:        sess,
+		cfg:         cfg,
+		flags:       flags,
+		json:        flags.Json,
+		verbose:     flags.Verbose,
+		log:         logger.Printf,
+		sessionPath: sessionPathOrEmpty(),
+	}
+	// Wire the parse-debug logger so --verbose surfaces schema drift.
+	if flags.Verbose {
+		api.SetParseDebugLogger(func(format string, args ...any) {
+			logger.Printf("warning: "+format, args...)
+		})
+	}
+	h.rt = &rt
+	return rt
+}
+
+// maxEUR resolves the spending guard in the documented precedence:
+// flag > env > config. Zero (or negative) means no guard.
+func (rt runtime) maxEUR() float64 {
+	if rt.flags != nil && rt.flags.Max > 0 {
+		return rt.flags.Max
+	}
+	if v := config.MaxEURFromEnv(); v > 0 {
+		return v
+	}
+	if rt.cfg != nil {
+		return rt.cfg.MaxEUR
+	}
+	return 0
+}
+
+// printJSON writes v to w as indented JSON, no HTML escaping (so '&'
+// in product names doesn't become \u0026 — matters for piping to jq).
+func printJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+func overlayEnvToken(sess *config.Session) {
+	tok := os.Getenv(auth.EnvAccessToken)
+	if tok == "" || sess == nil {
+		return
+	}
+	c, _ := auth.DecodeClaims(tok)
+	exp := auth.Expiry(c)
+	sess.Account = &config.Account{
+		Token:     tok,
+		Email:     emailFromClaims(c),
+		ExpiresAt: exp,
+	}
+	sess.MarkAccountFromEnv()
+}
+
+func emailFromClaims(c *auth.Claims) string {
+	if c == nil {
+		return ""
+	}
+	return c.Email
+}
+
+func newLogger(verbose bool) *log.Logger {
+	if !verbose {
+		return log.New(io.Discard, "", 0)
+	}
+	return log.New(os.Stderr, "{{.Name}}: ", 0)
+}
+
+func sessionPathOrEmpty() string {
+	p, err := config.SessionPath()
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// guardEnforceAdd returns the resolved cap (or 0=no guard) and the formatted
+// error message when the projected total exceeds it.
+// Used by cart commands; see shop-cli-skill/references/conventions.md §5.
+func (rt runtime) guardEnforceAdd(projectedCents int64) (float64, error) {
+	cap := rt.maxEUR()
+	if cap <= 0 {
+		return 0, nil
+	}
+	capCents := int64(cap * 100)
+	if projectedCents > capCents {
+		return cap, fmt.Errorf("projected total %.2f EUR exceeds --max %.2f EUR (set a higher --max or remove items)",
+			float64(projectedCents)/100, cap)
+	}
+	return cap, nil
+}

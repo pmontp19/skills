@@ -1,0 +1,72 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"{{.Module}}/internal/client"
+)
+
+// Package api holds typed operations against the platform. Stateless; one file
+// per resource. Functions take (ctx, *client.Client, ...) and return (T, error).
+// NEVER touches disc directly — only the client.
+//
+// Replace this placeholder with the discovered types from Phase 1.
+// Keep the custom UnmarshalJSON pattern for platforms with dynamic per-row
+// attribute columns (VTEX dynamic columns, Ocado product metadata, etc.) — see
+// shop-cli-skill/references/process.md "Custom UnmarshalJSON for dynamic keys".
+
+// Product is the canonical catalog row. Strip down to load-bearing fields;
+// capture platform-specific extras in Attributes (or a typed block).
+type Product struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Brand      string              `json:"brand"`
+	Price      string              `json:"price"` // formatted display string
+	Attributes map[string][]string `json:"attributes,omitempty"`
+}
+
+// Search hits the platform's catalog search endpoint. Replace path + response
+// type with the discovered shape (Phase 1 §3).
+func Search(ctx context.Context, c *client.Client, query string, limit int) ([]Product, error) {
+	if c == nil {
+		return nil, fmt.Errorf("nil client")
+	}
+	// Example VTEX path; adapt to the platform.
+	path := fmt.Sprintf("/api/catalog_system/pub/products/search?ft=%s&_from=0&_to=%d",
+		query, limit-1)
+	var resp []Product
+	if err := c.DoJSON(ctx, "GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// --- Parse* helpers (silent-skip on schema drift, with optional debug hook) ---
+// Pattern from sirena-cli L6: package-level logger, default nil. Wire it from
+// runtime.go when --verbose is set.
+
+var parseDebugLogger func(format string, args ...any)
+
+// SetParseDebugLogger installs a debug logger for Parse* failures. Returns
+// the previous one (usually nil). Pass nil to disable.
+func SetParseDebugLogger(fn func(format string, args ...any)) (prev func(format string, args ...any)) {
+	prev = parseDebugLogger
+	parseDebugLogger = fn
+	return prev
+}
+
+func logParseFailure(parser string, raw json.RawMessage) {
+	if parseDebugLogger == nil {
+		return
+	}
+	const max = 256
+	s := strconv.Quote(string(bytes.TrimSpace(raw)))
+	if len(s) > max {
+		s = s[:max] + "..."
+	}
+	parseDebugLogger("%s: failed to decode %s bytes: %s", parser, len(raw), s)
+}

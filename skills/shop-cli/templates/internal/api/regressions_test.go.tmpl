@@ -1,0 +1,21 @@
+package api
+
+// Regression tests — one per bug, commented with the bug ID and a one-line
+// description of the original bug. Bugs found in Phase 6 (adversarial review)
+// land here before the fix is declared done.
+//
+// Pattern from sirena-cli/internal/api/regressions_test.go.
+//
+// Example shape (replace with real regressions as the project ships):
+//
+//   // H4 — spending guard ignored shipping.
+//   // OrderForm.TotalCents() returned items-only, so once region bound a
+//   // shipping totalizer the guard approved adds over the all-in cap.
+//   func TestTotalCentsIncludesShipping(t *testing.T) {
+//       of := &OrderForm{Value: 998, ...}
+//       if got := of.TotalCents(); got != 998 {
+//           t.Fatalf("TotalCents = %d, want 998 (all-in)", got)
+//       }
+//   }
+//
+// Keep this file even when empty — every project accumulates regressions.

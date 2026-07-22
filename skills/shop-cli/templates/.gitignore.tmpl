@@ -1,0 +1,13 @@
+/bin/
+/dist/
+*.test
+*.out
+.DS_Store
+{{.Name}}-cli-backup-*.bundle
+
+# Discovery captures — these are SECRETS (live session tokens, POST bodies).
+# Keep HARs and cookie exports under /tmp/ or outside the repo, never commit.
+*.har
+cookies.json
+*-cookies.json
+/captures/

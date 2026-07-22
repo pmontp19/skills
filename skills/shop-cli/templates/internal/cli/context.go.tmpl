@@ -1,0 +1,60 @@
+package cli
+
+import (
+	"context"
+
+	"github.com/spf13/cobra"
+)
+
+// Flags holds the persistent (global) flags resolved by cobra's pflag.
+// Injected into ctx by PersistentPreRunE via WithFlags.
+type Flags struct {
+	Json    bool
+	Config  string
+	Max     float64
+	Verbose bool
+	Lang    string
+}
+
+type ctxKey int
+
+const (
+	keyFlags ctxKey = iota
+	keyRT
+)
+
+// WithFlags injects the resolved flags into ctx (called from PreRunE).
+func WithFlags(ctx context.Context, f *Flags) context.Context {
+	return context.WithValue(ctx, keyFlags, f)
+}
+
+func flagsFrom(ctx context.Context) *Flags {
+	v, _ := ctx.Value(keyFlags).(*Flags)
+	return v
+}
+
+// rtHolder lives in ctx so that ctxValue can memoize the runtime per invocation.
+// The first ctxValue(ctx) call constructs it; subsequent calls return it.
+type rtHolder struct {
+	rt *runtime
+}
+
+func holderFrom(ctx context.Context) *rtHolder {
+	h, _ := ctx.Value(keyRT).(*rtHolder)
+	if h == nil {
+		h = &rtHolder{}
+	}
+	return h
+}
+
+// bindRT stores the runtime holder into ctx. Call once in NewRoot to seed the
+// context passed down to subcommands.
+func bindRT(ctx context.Context) context.Context {
+	return context.WithValue(ctx, keyRT, &rtHolder{})
+}
+
+// ensureRootCtx seeds the root command's ctx with an rtHolder so that
+// PersistentPreRunE can rely on it. Called once in NewRoot.
+func ensureRootCtx(root *cobra.Command) {
+	root.SetContext(bindRT(root.Context()))
+}

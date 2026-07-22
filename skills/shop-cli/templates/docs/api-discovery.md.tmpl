@@ -1,0 +1,212 @@
+# {{.Store}} API discovery
+
+{{.Store}} (`{{.StoreURL}}`) runs on **{{.Backend}}**. Reverse-engineered by
+reading the official client's HTTP traffic against the live site. This document
+mirrors the structure of `bonpreu-cli`/`decathlon-cli`/`sirena-cli`'s discovery
+notes: every endpoint listed here is exercised by the CLI and pinned to a real
+response in `internal/api/testdata/*.json`.
+
+> **Companion:** _<link to sitemap doc, etc., if any>_.
+
+## 0. Capture method
+
+Describe how this discovery was produced. Future re-derivation depends on
+using the same method (or a documented equivalent).
+
+- **Tool:** `agent-browser network har start/stop` | Chrome DevTools HAR export | MITM | other
+- **HAR location (offline only):** `/tmp/{{.Name}}.har` — **never inside the repo.** HAR files embed `Set-Cookie` headers and POST bodies; treat them as secrets.
+- **Live session export:** `/tmp/{{.Name}}-cookies.json` (via `agent-browser cookies get --json`) — for cookie-jar auth (see §6.2).
+- **Captured on:** _<date, store version, locale, account-state (guest/logged-in)>_.
+- **Re-record trigger:** re-record when the platform ships a new backend version, when a fixture round-trip test breaks, or when an endpoint returns a shape different from the one pinned here.
+
+### jq recipes used to filter the HAR
+
+```sh
+# All JSON API calls (method + status + URL)
+jq -r '.log.entries[]
+  | select(.response.content.mimeType | test("json"))
+  | select(.request.url | test("google-analytics|segment|sentry|datadog|doubleclick|/collect|/track|/beacon|/log") | not)
+  | "\(.request.method) \(.response.status) \(.request.url)"' /tmp/{{.Name}}.har
+
+# Full detail for one endpoint
+jq '.log.entries[] | select(.request.url | test("api/search"))
+  | {request: {method: .request.method, headers: .request.headers,
+     postData: .request.postData.text},
+     response: .response.content.text}' /tmp/{{.Name}}.har
+```
+
+## 1. Hosts and routing
+
+| Host | Role |
+|------|------|
+| `{{.StoreURL}}` | _<storefront / API / auth>_ |
+| _<cdn-host>_ | _<role>_ |
+
+_Edge CDN / TLS fingerprinting notes_ (CloudFront, Cloudflare, etc.).
+
+## 2. Auth model
+
+Two layers, **both unauthenticated for catalog reads** (typical pattern):
+
+| Mechanism | Where | Purpose |
+|-----------|-------|---------|
+| guest cookie | `POST /api/.../session` | region/channel context — required to surface per-SKU price |
+| account token | (login flow) | needed for orders/wishlist/etc. |
+
+> **Gotcha:** _<the gotcha you discovered, e.g. "without the segment cookie, the per-SKU price block is absent".>_
+
+### POST /api/.../session — guest session
+
+```http
+POST /api/.../session HTTP/2
+Content-Type: application/json
+{}
+
+HTTP/2 201
+set-cookie: guest_session=<jwt>; expires=+5d; ...
+{"token":"..."}
+```
+
+## 3. Catalog (unauthenticated)
+
+All under `/api/...`. Pagination convention: _<describe `_from`/`_to` or `page`/`size` etc.>_.
+
+### GET /products/search?ft=<query>
+
+```http
+GET /api/.../products/search?ft=gamba&_from=0&_to=29 HTTP/2
+
+HTTP/2 200
+[
+  {
+    "productId": "1468",
+    "productName": "Gamba salada",
+    "brand": "La Sirena",
+    "items": [{ "itemId": "1468", "sellers": [{ "commertialOffer": { "Price": 7.99 } }] }]
+  }
+]
+```
+
+> **Gotcha:** _<e.g. "fq=C:/<rootId>/<...>/<leafId>/ requires leading AND trailing slash".>_
+
+Captured in `internal/api/testdata/search_<term>.json`.
+
+### GET /products/<id>
+
+_<request + response literal, captured fixture>_
+
+### GET /category/tree/<depth>
+
+_<same>_
+
+### GET /brand/list
+
+_<same>_
+
+## 4. Cart (guest, if applicable)
+
+### POST /api/.../orderForm — create guest cart
+
+_<request + response literal>_
+
+### POST /api/.../orderForm/<id>/items — ADD
+
+_<request + response literal. Note the singular `orderForm` vs `orderForms`.>_
+
+### POST /api/.../orderForm/<id>/items/update — SET / REMOVE
+
+_<request + response literal>_
+
+## 5. Region / shipping (if applicable)
+
+### GET /api/.../regions?postalCode=<cp>
+
+_<request + response literal>_
+
+### POST /api/.../orderForm/<id>/attachments/shippingData — SET
+
+_<request + response literal>_
+
+## 6. Account auth
+
+### Paths shipped
+
+- **Token injection (MVP, always shippable):** `{{.Name}} login --token <value>` or env `{{.Upper}}_ACCESS_TOKEN`.
+- **Cookie-jar injection (MVP, always shippable, when the platform is cookie-based):** `{{.Name}} login --cookies cookies.json` (file produced by `agent-browser cookies get --json`) or env `{{.Upper}}_COOKIEJAR` pointing at a file path.
+- **Interactive flow:** _<OAuth2/PKCE or magic-link — best-effort if blocked>_
+
+### POST /api/.../login/start — kickoff
+
+_<request + response literal>_
+
+### POST /api/.../login/accesskey/send
+
+_<request + response literal>_
+
+### POST /api/.../login/accesskey/validate
+
+_<request + response literal>_
+
+### JWT claims shape
+
+```json
+{
+  "sub": "...",
+  "iss": "...",
+  "email": "...",
+  "exp": 1234567890
+}
+```
+
+### Persistence model
+
+- env `{{.Upper}}_ACCESS_TOKEN` → in-memory overlay, **stripped before writing** (envSourced flag).
+- env `{{.Upper}}_COOKIEJAR` → path read on each invocation, cookies loaded into the client jar, **never copied into `session.json`** (envSourced flag, same pattern).
+- `login --token` → persisted to `~/.{{.Name}}/session.json` (0600).
+- `login --cookies cookies.json` → cookies parsed and persisted to `~/.{{.Name}}/session.json` (0600); source file can be deleted afterwards.
+- `login --start --code` → flow-issued token persisted same way.
+
+### What's NOT reachable
+
+- _<endpoint that returns 403 to every client — document why it's edge-blocked, not token-gated>_
+
+## 7. Repro
+
+The exact CLI commands that exercise each section. Run against the live site
+to verify after any change to discovery or code.
+
+```sh
+# Catalog (no login)
+./bin/{{.Name}} search gamba --json
+./bin/{{.Name}} product 1468 --json
+
+# Guest cart
+./bin/{{.Name}} cart get
+./bin/{{.Name}} cart add 1468 2
+./bin/{{.Name}} --max 20 cart add 35 1   # spending guard (all-in total)
+
+# Account auth (token path)
+export {{.Upper}}_ACCESS_TOKEN=<value>
+./bin/{{.Name}} whoami
+./bin/{{.Name}} logout
+
+# Account auth (cookie-jar path) — when auth is cookie + CSRF, not bearer
+agent-browser cookies get --json > /tmp/{{.Name}}-cookies.json
+./bin/{{.Name}} login --cookies /tmp/{{.Name}}-cookies.json
+./bin/{{.Name}} whoami
+```
+
+## Appendix A — Endpoint verification triage
+
+When a generated command fails against the live API, this is the triage table.
+Borrowed from `agent-browser`'s `derive-client` skill (it nails the common
+shapes).
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| 401 / 403 | Expired or missing session | Re-login via `agent-browser` / browser, re-export cookies/token. |
+| 403 / 419 on writes | CSRF token is per-session or per-form | Fetch the CSRF endpoint first; or keep that flow browser-driven. |
+| Works once then breaks | Signed or expiring request params (HMAC, `_ts`, rotating nonces) | Fall back to the browser for that step; derive the rest. |
+| Response shape differs from HAR | A/B tests, geo-dependent responses, locale variants | Re-record and treat the union of fields as optional. |
+| 406 / 415 | Missing `Accept` with vendor version, e.g. `application/vnd.dkt.shoppingapp.v2+json` | Reproduce the exact `Accept`/`Content-Type` headers the official client sends. |
+| 400 on `POST` | Body shape drifted, extra/missing required field | Diff the captured `postData.text` against your struct's marshaled output byte for byte. |

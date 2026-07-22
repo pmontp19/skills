@@ -1,0 +1,54 @@
+package api
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Fixture round-trip test pattern (see shop-cli-skill/references/conventions.md §7).
+//
+// Every API type MUST be pinned to a real captured response in testdata/.
+// These tests catch response↔type drift at CI time, not in the field.
+//
+// Replace placeholderProduct with the platform's real search shape, captured
+// live during Phase 1. Synthetic fixtures only for PII; mark in the comment.
+
+func TestSearchFixture(t *testing.T) {
+	var prods []Product
+	mustReadFixture(t, "search_placeholder.json", &prods)
+	if len(prods) == 0 {
+		t.Fatal("no products decoded from search_placeholder.json")
+	}
+	p := prods[0]
+	if p.ID == "" || p.Name == "" {
+		t.Fatalf("load-bearing fields empty: %+v", p)
+	}
+	// Re-marshal and re-decode; assert stability.
+	b, err := json.Marshal(&p)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	var again Product
+	if err := json.Unmarshal(b, &again); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if again.ID != p.ID || again.Name != p.Name {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", again, p)
+	}
+}
+
+// mustReadFixture is the single point for loading testdata/. If you change the
+// fixture format, change it here once.
+func mustReadFixture(t *testing.T, name string, v any) {
+	t.Helper()
+	p := filepath.Join("testdata", name)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", p, err)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		t.Fatalf("unmarshal %s into %T: %v", name, v, err)
+	}
+}

@@ -1,0 +1,44 @@
+# Coordination notes — multi-agent
+
+This file is a scratchpad for agents working in parallel on this repo. Read
+it before editing, append a line when you start a unit of work, update it
+when you finish.
+
+Active agent sessions (as of _<date>_):
+
+- **Session _<id>_ _<role>_:** working on _<feature>_ in `internal/...`. Touching:
+  - `internal/api/<topic>.go` (NEW)
+  - `internal/cli/<topic>.go` (NEW)
+  - `internal/cli/root.go` (small additions only: register new command)
+  - `internal/api/testdata/<topic>_<id>.json` (NEW)
+  - `docs/<store>-api-discovery.md` (section _<n>_)
+- **Session _<id>_ _<role>_:** _<feature>_.
+
+## Coordination rules
+
+1. **Read before edit.** Always re-read a shared file (`root.go`, `whoami.go`,
+   `docs/*`) immediately before editing — another agent may have touched it.
+2. **Don't move code between files** another agent might own — add, don't refactor.
+3. **No big-bang edits to `root.go`.** Only add lines in the `AddCommand(...)`
+   block; never rewrite it.
+4. **`go test ./...` must pass** before declaring a unit of work done.
+5. **No commits** — the human reviews and commits.
+6. **Adversarial reviewer runs AFTER implementers, not in parallel.** Running
+   the reviewer concurrently with the implementers produces false negatives
+   (the reviewer inspects work-in-progress and reports finished work as "not
+   fixed"). Pattern: implementers land their work → build/test green → THEN
+   launch the reviewer on the consolidated state.
+
+---
+
+## Session log (append-only)
+
+**Session _<id>_ — _<feature>_ subagent (done, _<date>_):** Shipped `{{.Name}}
+<cmd>`. Created `internal/api/<topic>.go` (+ types), `internal/cli/<topic>.go`,
+fixtures `internal/api/testdata/<topic>_<id>.json`, and
+`internal/api/<topic>_test.go`. Surgical edits: added one line
+`new<Topic>Cmd(),` to the `AddCommand` block in `internal/cli/root.go`. Live-
+verified end-to-end. `go build`, `go test ./...`, `go vet ./...` all clean.
+
+Out-of-scope findings for orchestrator:
+- _<bug id>_: _<description>_. Suggested fix: _<fix>_.

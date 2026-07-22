@@ -1,0 +1,97 @@
+# {{.Store}} — feasibility
+
+**Date:** _<fill in>_
+**Target:** `{{.StoreURL}}` ({{.Backend}} — confirmed in §2)
+**Verdict in one line:** _<viable: <path> | blocked: <reason>>_
+
+## 1. Re-test the prior assumption
+
+State the assumed blocker in one sentence, then write the **executable repro**
+that proves or refutes it. Most "blockers" are environment artifacts.
+
+```
+$ curl -sS -o /dev/null -w '%{http_code}\n' <endpoint>
+200
+```
+
+Escalate to a TLS-impersonating client only if the naive client fails:
+
+```
+$ python3 -c "from curl_cffi import requests; print(requests.get('<url>', impersonate='chrome').status_code)"
+200
+```
+
+If neither passes, name the actual blocker (Cloudflare Turnstile, app-only
+OTP, paid subscription wall, etc.) and stop here. Document it for the human.
+
+## 2. Architecture confirmed from live traffic
+
+ASCII diagram of the hosts the official client calls. One box per host, with
+role and auth header. Example shape (adapt):
+
+```
+                  ┌────────────────────────────────┐
+                  │   {{.StoreURL}}   │  ← storefront
+                  └───────────────┬────────────────┘
+                                  │ (HTTPS)
+        ┌─────────────────────────┼─────────────────────────┐
+        ▼                         ▼                         ▼
+  /api/catalog/...         /api/checkout/...         /api/auth/...
+  (catalog reads,          (cart mutations,          (login flow,
+   unauthenticated)         guest cart OK)            see §5)
+        │                         │
+        ▼                         ▼
+  Cookie: none           Cookie: guest_session
+```
+
+**Auth headers observed** (table):
+
+| Header | Value | Per-host | Purpose |
+|---|---|---|---|
+| `User-Agent` | _<UA>_ | everywhere | bot-scoring |
+| _<header>_ | _<value>_ | _<yes/no>_ | _<purpose>_ |
+
+## 3. Endpoint inventory
+
+Per surface, list `METHOD path → purpose`. Annotate what FAILS live (403,
+empty body, wrong format) so the agent doesn't waste cycles on dead paths.
+
+### Catalog (no login)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/...search` | full-text search |
+| GET | `/api/.../product/<id>` | product detail |
+
+### Cart (guest)
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/.../cart` | create guest cart |
+
+### Account
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/.../login` | account login |
+
+## 4. Login friction
+
+Does the login page gate the password step with reCAPTCHA / device OTP / a
+custom-scheme redirect? If so, plan the **browser-then-paste-code** flow
+(`gh`/`claude`/`codex` style) and the **token-injection MVP** (`login --token`
+/ env var) as the agent path.
+
+## 5. Legal / ToS / bug-bounty context
+
+- ToS URL: _<link>_
+- Bug bounty (if any): _<link + scope>_
+- Scope we'll stay within: catalog/cart reads at a sane rate. No scraping at scale.
+
+## 6. Existing landscape
+
+GitHub search for prior CLIs/scrappers for `{{.Store}}`:
+
+- _<repo> — what to reuse / avoid._
+- _<repo> — same._
+
+## 7. Open questions
+
+- _<question that needs a live test or a real account to answer>._

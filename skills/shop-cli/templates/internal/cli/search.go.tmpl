@@ -1,0 +1,91 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"text/tabwriter"
+
+	"github.com/spf13/cobra"
+
+	"{{.Module}}/internal/api"
+)
+
+// newSearchCmd is the canonical example of a cobra command in this CLI.
+// Use this shape for every new command (see shop-cli-skill/references/layering.md):
+//   - SilenceUsage + SilenceErrors: cobra never prints; main owns all output.
+//   - RunE returns errors up the stack (no panic, no os.Exit).
+//   - rt := ctxValue(ctx) gives the memoized runtime.
+//   - rt.json branch: printJSON to stdout.
+//   - human branch: tabwriter to stdout, status/diagnostics to stderr.
+func newSearchCmd() *cobra.Command {
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Full-text catalog search",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			rt := ctxValue(ctx)
+			prods, err := api.Search(cmd.Context(), rt.client, args[0], limit)
+			if err != nil {
+				return err
+			}
+			if rt.json {
+				return printJSON(os.Stdout, prods)
+			}
+			if len(prods) == 0 {
+				fmt.Fprintf(os.Stderr, "no results for %q\n", args[0])
+				return nil
+			}
+			tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tNAME\tBRAND\tPRICE")
+			for _, p := range prods {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.ID, p.Name, p.Brand, p.Price)
+			}
+			return tw.Flush()
+		},
+	}
+	cmd.Flags().IntVarP(&limit, "limit", "l", 30, "max results")
+	return cmd
+}
+
+// newWhoamiCmd reports the session state (always exits 0 unless network-verify
+// is requested AND fails — see sirena-cli's --no-verify flag).
+func newWhoamiCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "whoami",
+		Short:         "Show session state (segment + account login status)",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt := ctxValue(cmd.Context())
+			type whoamiOut struct {
+				LoggedIn bool   `json:"logged_in"`
+				Email    string `json:"email,omitempty"`
+				Source   string `json:"source"`
+			}
+			out := whoamiOut{Source: "none"}
+			if rt.sess != nil {
+				if rt.sess.IsAccountFromEnv() {
+					out.Source = "env"
+				} else if rt.sess.LoggedIn() {
+					out.Source = "session"
+				}
+				out.LoggedIn = rt.sess.LoggedIn()
+				if rt.sess.Account != nil {
+					out.Email = rt.sess.Account.Email
+				}
+			}
+			if rt.json {
+				return printJSON(os.Stdout, out)
+			}
+			fmt.Fprintf(os.Stdout, "logged_in: %v\n", out.LoggedIn)
+			if out.Email != "" {
+				fmt.Fprintf(os.Stdout, "email: %s\n", out.Email)
+			}
+			fmt.Fprintf(os.Stdout, "source: %s\n", out.Source)
+			return nil
+		},
+	}
+	return cmd
+}

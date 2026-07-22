@@ -1,0 +1,290 @@
+package config
+
+import (
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"time"
+)
+
+// Package config owns ~/.{{.Name}}/{session,config}.json persistence.
+// Invariants (see shop-cli-skill/references/conventions.md):
+//   - All files 0600, dir 0700, atomic write (temp + rename).
+//   - Load on missing file returns a zero struct, never an error.
+//   - Env-sourced account tokens are stripped before writing (never leak to disk).
+
+const (
+	DirName       = "{{.Name}}"
+	SessionFile   = "session.json"
+	ConfigFile    = "config.json"
+	envHome       = "{{.Upper}}_HOME"
+	envMaxEUR     = "{{.Upper}}_MAX_EUR"
+	envAccountTok = "{{.Upper}}_ACCESS_TOKEN"
+
+	// Refresh margins: refresh this long before the actual expiry.
+	segmentMargin  = 6 * time.Hour
+	accessTokenMargin = 60 * time.Second
+)
+
+// Flags-resolved defaults (LangES, LangCA pattern — adapt to the target store).
+const (
+	LangES = "es"
+	LangCA = "ca"
+)
+
+func ValidLang(s string) bool {
+	switch s {
+	case LangES, LangCA:
+		return true
+	}
+	return false
+}
+
+// Session is the persisted state under ~/.{{.Name}}/session.json (0600).
+type Session struct {
+	Segment      string    `json:"segment,omitempty"`
+	SessionToken string    `json:"session_token,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	Account      *Account  `json:"account,omitempty"`
+
+	// envSourced is unexported on purpose: invisible to JSON. Set when Account
+	// was populated from {{.Upper}}_ACCESS_TOKEN; SaveSession strips it before
+	// writing so the env-sourced token never lands on disk.
+	envSourced bool
+}
+
+// Account holds the account-session state (optional; nil when logged out).
+type Account struct {
+	Token        string    `json:"token,omitempty"`
+	RefreshToken string    `json:"refresh_token,omitempty"`
+	Email        string    `json:"email,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+}
+
+// Config is the persisted defaults under ~/.{{.Name}}/config.json (0600).
+type Config struct {
+	MaxEUR float64 `json:"max_eur,omitempty"`
+	Lang   string  `json:"lang,omitempty"`
+}
+
+// Dir returns ~/.{{.Name}} (or ${{.Upper}}_HOME if set) and ensures it exists.
+func Dir() (string, error) {
+	base := os.Getenv(envHome)
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		base = home
+	}
+	d := filepath.Join(base, "."+DirName)
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		return "", err
+	}
+	return d, nil
+}
+
+func SessionPath() (string, error) {
+	d, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, SessionFile), nil
+}
+
+func ConfigPath() (string, error) {
+	d, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, ConfigFile), nil
+}
+
+// LoadSession returns the persisted session or a zero-value Session if no file.
+func LoadSession() (*Session, error) {
+	p, err := SessionPath()
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return &Session{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var s Session
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", p, err)
+	}
+	return &s, nil
+}
+
+// SaveSession persists the session 0600 atomic. Strips env-sourced accounts.
+func SaveSession(s *Session) error {
+	if s == nil {
+		return errors.New("nil session")
+	}
+	if s.IsAccountFromEnv() {
+		snapshot := *s
+		snapshot.Account = nil
+		snapshot.envSourced = false
+		return saveSession(&snapshot)
+	}
+	return saveSession(s)
+}
+
+func saveSession(s *Session) error {
+	p, err := SessionPath()
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSecret(p, b)
+}
+
+// LoadConfig returns the persisted config or a zero-value Config if no file.
+func LoadConfig() (*Config, error) {
+	p, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	return LoadConfigFrom(p)
+}
+
+// LoadConfigFrom reads config from an explicit path (used by --config).
+// Missing file → zero Config (no error).
+func LoadConfigFrom(path string) (*Config, error) {
+	if path == "" {
+		p, err := ConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		path = p
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return &Config{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c Config
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return &c, nil
+}
+
+// SaveConfig persists the config 0600 atomic.
+func SaveConfig(c *Config) error {
+	p, err := ConfigPath()
+	if err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSecret(p, b)
+}
+
+// SegmentValid reports whether the guest segment cookie is usable.
+func (s *Session) SegmentValid() bool {
+	if s == nil || s.Segment == "" || s.ExpiresAt.IsZero() {
+		return false
+	}
+	return time.Until(s.ExpiresAt) > segmentMargin
+}
+
+// LoggedIn reports whether an account session is active (with margin).
+func (s *Session) LoggedIn() bool {
+	if s == nil || s.Account == nil || s.Account.Token == "" {
+		return false
+	}
+	if s.Account.ExpiresAt.IsZero() {
+		return true // env-sourced token without expiry; trust until server says no
+	}
+	return time.Until(s.Account.ExpiresAt) > accessTokenMargin
+}
+
+// MarkAccountFromEnv tags the account as sourced from the environment, so
+// SaveSession strips it before writing.
+func (s *Session) MarkAccountFromEnv() {
+	if s == nil {
+		return
+	}
+	s.envSourced = true
+}
+
+func (s *Session) IsAccountFromEnv() bool {
+	return s != nil && s.envSourced
+}
+
+// MaxEURFromEnv reads the spending-cap fallback from the environment.
+// Returns 0 if unset or invalid.
+func MaxEURFromEnv() float64 {
+	v := os.Getenv(envMaxEUR)
+	if v == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f <= 0 {
+		return 0
+	}
+	return f
+}
+
+// NewDeviceID generates a fresh UUIDv4 (for client identification).
+// Useful when the platform requires a stable device id per session.
+func NewDeviceID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Crypto rand should not fail; fall back to a time-based id.
+		return fmt.Sprintf("dev-%d", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// writeSecret writes data to path 0600 atomic (temp + chmod + rename).
+// Defends against relaxed umask and concurrent writes.
+func writeSecret(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}

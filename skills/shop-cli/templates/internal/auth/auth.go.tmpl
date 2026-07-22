@@ -1,0 +1,97 @@
+package auth
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Package auth is protocol-pure: no transport, no disc, no cobra.
+// The cli layer composes it. The config layer stores the result.
+//
+// What ships here depends on the platform (Phase 1 §6):
+//   - Token injection (always shippable): handled in cli/auth.go directly.
+//   - OAuth2/PKCE: add AuthorizeURL/Exchange/Refresh/ParseCode (see decathlon-cli).
+//   - VTEX-ID magic-link/classic: add Flow.Start/SendAccessKey/ValidateAccessKey
+//     (see sirena-cli).
+//
+// DecodeClaims is universal — any JWT-carrying platform can use it as-is.
+
+// CookieName / EnvAccessToken are platform-specific. Override for the target.
+// Example values shown are from sirena-cli (VTEX).
+const (
+	CookieName     = "{{.Upper}}_AUTH_COOKIE"
+	EnvAccessToken = "{{.Upper}}_ACCESS_TOKEN"
+)
+
+// Claims is the subset of JWT claims we read for display. We do NOT verify
+// the signature — the bearer is opaque to us; the issuer validates on use.
+type Claims struct {
+	Sub       string `json:"sub"`
+	Iss       string `json:"iss"`
+	Email     string `json:"email"`
+	UserID    string `json:"userId"`
+	Exp       int64  `json:"exp"`
+	Iat       int64  `json:"iat"`
+}
+
+// DecodeClaims returns the decoded payload of a JWT WITHOUT verifying the
+// signature. Display-only — never use this to make security decisions; the
+// platform validates the token server-side on every authenticated request.
+func DecodeClaims(token string) (*Claims, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("not a JWT (expected 3 dot-separated parts)")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		// Fall back to padded encoding.
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("decode JWT payload: %w", err)
+		}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, fmt.Errorf("parse JWT payload: %w", err)
+	}
+	c := &Claims{}
+	if v, ok := raw["sub"].(string); ok {
+		c.Sub = v
+	}
+	if v, ok := raw["iss"].(string); ok {
+		c.Iss = v
+	}
+	if v, ok := raw["email"].(string); ok {
+		c.Email = v
+	}
+	if v, ok := raw["userId"].(string); ok {
+		c.UserID = v
+	}
+	if v, ok := raw["exp"].(float64); ok {
+		c.Exp = int64(v)
+	}
+	if v, ok := raw["iat"].(float64); ok {
+		c.Iat = int64(v)
+	}
+	// Some platforms nest user/email under a "user" object.
+	if c.Email == "" {
+		if u, ok := raw["user"].(map[string]any); ok {
+			if v, ok := u["email"].(string); ok {
+				c.Email = v
+			}
+		}
+	}
+	return c, nil
+}
+
+// Expiry returns the claim's exp as a time.Time, or the zero time if absent.
+func Expiry(c *Claims) time.Time {
+	if c == nil || c.Exp == 0 {
+		return time.Time{}
+	}
+	return time.Unix(c.Exp, 0)
+}

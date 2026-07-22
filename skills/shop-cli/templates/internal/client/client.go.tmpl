@@ -1,0 +1,172 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"time"
+
+	"{{.Module}}/internal/config"
+)
+
+// Package client is the ONLY place that talks to the network.
+// Invariants (see shop-cli-skill/references/layering.md):
+//   - Knows hosts + headers + auth mechanism, NOT endpoint shapes.
+//   - Never touches disc directly (config owns that).
+//   - SyncSession() returns dirty=true iff the session mutated during this
+//     invocation; the cli layer's PersistentPostRunE persists only when dirty.
+
+// BaseURL is the storefront/api host. Override in tests by setting c.BaseURL.
+// Discover the right value in Phase 1; replace this default.
+const BaseURL = "{{.StoreURL}}"
+
+// MaxBodyBytes caps any single response body. Defensive against runaway
+// responses from the platform.
+const MaxBodyBytes = 10 * 1024 * 1024 // 10 MB
+
+// Client is the HTTP transport. Construct one per invocation via New.
+type Client struct {
+	HTTP    *http.Client
+	Sess    *config.Session
+	Log     *log.Logger
+	BaseURL string
+	dirty   bool
+}
+
+// New returns a client seeded with the session's cookies (if any).
+// logger may be nil (silenced).
+func New(sess *config.Session, logger *log.Logger) *Client {
+	if sess == nil {
+		sess = &config.Session{}
+	}
+	jar, _ := cookiejar.New(nil) // never errors with nil options
+	// Seed the jar with any persisted cookies here if the platform uses them.
+	// (VTEX: VtexIdclientAutCookie, etc. — see sirena-cli/internal/client/client.go.)
+	return &Client{
+		HTTP: &http.Client{
+			Timeout: 30 * time.Second,
+			Jar:     jar,
+		},
+		Sess:    sess,
+		Log:     logger,
+		BaseURL: BaseURL,
+	}
+}
+
+// NewRequest builds a request with the headers the platform expects.
+// Adapt the header set + cookie injection to the discovered auth model
+// (Phase 1 §2). Common patterns:
+//   - Web storefront:  User-Agent + Accept-Language + session cookies in jar.
+//   - Mobile BFF:      x-api-key (host-scoped) + x-mobileapp-* + accept-language.
+//   - VTEX IO:         vtex_segment + vtex_session cookies (manual).
+func (c *Client) NewRequest(ctx context.Context, method, path string, body any) (*http.Request, error) {
+	u, err := url.Parse(c.BaseURL + path)
+	if err != nil {
+		return nil, err
+	}
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		r = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), r)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 ({{.Name}}-cli; +https://github.com/pmontp19/{{.Name}}-cli)")
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	// Attach the account bearer if logged in.
+	if c.Sess != nil && c.Sess.LoggedIn() {
+		req.Header.Set("Authorization", "Bearer "+c.Sess.Account.Token)
+	}
+	return req, nil
+}
+
+// DoRaw executes the request and returns the raw body. Status >= 400 → *HTTPError.
+func (c *Client) DoRaw(ctx context.Context, req *http.Request) ([]byte, error) {
+	resp, err := c.HTTP.Do(req.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d bytes", MaxBodyBytes)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &HTTPError{Status: resp.StatusCode, URL: req.URL.String(), Body: truncate(body, 500)}
+	}
+	return body, nil
+}
+
+// DoJSON executes method on path, marshals in as the body, unmarshals the
+// response into out (if out != nil).
+func (c *Client) DoJSON(ctx context.Context, method, path string, in, out any) error {
+	req, err := c.NewRequest(ctx, method, path, in)
+	if err != nil {
+		return err
+	}
+	body, err := c.DoRaw(ctx, req)
+	if err != nil {
+		return err
+	}
+	if out != nil && len(body) > 0 {
+		if err := json.Unmarshal(body, out); err != nil {
+			return fmt.Errorf("decode response from %s %s: %w", method, path, err)
+		}
+	}
+	return nil
+}
+
+// SyncSession reports whether the session mutated during this invocation.
+// The cli layer's PersistentPostRunE calls this once and persists if true.
+func (c *Client) SyncSession() bool {
+	return c.dirty
+}
+
+// MarkDirty signals that a request captured/refreshed a cookie or token.
+// Subagents adding refresh logic (segment cookie, CSRF rotation, token refresh)
+// should call this when their flow mutates c.Sess.
+func (c *Client) MarkDirty() { c.dirty = true }
+
+// HTTPError is returned for any 4xx/5xx response. Body is truncated.
+type HTTPError struct {
+	Status int
+	URL    string
+	Body   string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d from %s: %s", e.Status, e.URL, e.Body)
+}
+
+// Expired reports whether the error is an auth-failure that a re-login fixes.
+func (e *HTTPError) Expired() bool {
+	return e != nil && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden)
+}
+
+// ErrNotLoggedIn is returned by commands that require an account session.
+var ErrNotLoggedIn = errors.New("not logged in; run `{{.Name}} login` or export {{.Upper}}_ACCESS_TOKEN")
+
+func truncate(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "..."
+}

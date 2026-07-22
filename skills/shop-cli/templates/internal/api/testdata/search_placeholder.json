@@ -1,0 +1,11 @@
+[
+  {
+    "id": "demo-001",
+    "name": "Demo product (replace with a real Phase-1 capture)",
+    "brand": "Demo brand",
+    "price": "1.23",
+    "attributes": {
+      "demo": ["value"]
+    }
+  }
+]

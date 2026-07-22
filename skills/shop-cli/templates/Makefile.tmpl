@@ -1,0 +1,24 @@
+.PHONY: build test test-cli vet fmt clean release
+
+build: ## Build the CLI into bin/{{.Name}}
+	go build -o bin/{{.Name}} ./cmd/{{.Name}}
+
+test: test-cli ## Run all tests
+
+test-cli: ## Run Go tests + vet
+	go test ./...
+	go vet ./...
+
+vet: ## Run go vet
+	go vet ./...
+
+fmt: ## Format Go code
+	gofmt -w .
+
+clean: ## Remove build artifacts
+	rm -rf bin dist
+
+release: ## Tag a release (requires goreleaser installed)
+	goreleaser release --clean
+
+.DEFAULT_GOAL := build

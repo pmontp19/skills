@@ -1,0 +1,105 @@
+# {{.Name}}-cli
+
+Unofficial, agent-friendly CLI for [{{.Store}}]({{.StoreURL}}) — _<one-paragraph
+description: what the CLI surfaces>_. Single static Go binary, `--json` on every
+command, no runtime deps.
+
+> **Unofficial.** {{.Store}} has no public API. This talks to the same HTTP
+> endpoints the official {{.Backend}} clients already use. "{{.Store}}" and any
+> product names are trademarks referenced only to describe compatibility. Bring
+> a sane request rate.
+
+## Status
+
+**MVP _<state>_.** What works end-to-end against the live site:
+
+- _<surface 1>_
+- _<surface 2>_
+
+**Open / planned:**
+
+- _<thing 1>_
+
+The API surface is reverse-engineered and documented in
+[`docs/{{.Name}}-api-discovery.md`](docs/{{.Name}}-api-discovery.md); every
+catalog and cart type is pinned to a real captured response by a fixture
+round-trip test (`internal/api/testdata/*.json`), so response↔type drift fails
+in CI, not in the field.
+
+## Success criteria
+
+The catalog MVP is **done** when these all work end-to-end with `--json` output
+and the fixture tests pass:
+
+- [ ] `{{.Name}} search <query>` — full-text search.
+- [ ] `{{.Name}} product <id>` — full product detail.
+- [ ] `{{.Name}} cart {get,add,set,remove,clear}` — guest cart (no login).
+- [ ] `{{.Name}} login --token <value>` / `whoami` / `logout`.
+- [ ] Every command accepts `--json` for machine-readable stdout.
+- [ ] `go test ./...` passes against captured real-response fixtures.
+- [ ] Single static Go binary, only stdlib + cobra.
+
+## Quickstart
+
+```sh
+# Build (requires Go 1.26+).
+go build -o bin/{{.Name}} ./cmd/{{.Name}}
+
+# Search the catalog (no login needed):
+./bin/{{.Name}} search <query> --json
+
+# Product detail:
+./bin/{{.Name}} product <id>
+
+# Guest cart (no login required; persists under ~/.{{.Name}}/session.json):
+./bin/{{.Name}} cart get
+./bin/{{.Name}} cart add <id> 2
+./bin/{{.Name}} --max 50 cart add <id> 3   # spending guard
+
+# Account auth (token path recommended for agents/CI):
+export {{.Upper}}_ACCESS_TOKEN=<value>
+./bin/{{.Name}} whoami
+./bin/{{.Name}} logout
+
+# Persistent defaults (~/.{{.Name}}/config.json):
+./bin/{{.Name}} config set max_eur 50
+./bin/{{.Name}} config get
+```
+
+State lives under `~/.{{.Name}}/` (override with `{{.Upper}}_HOME`):
+`session.json` (0600 — guest session + account token when logged in) and
+`config.json` (0600 — defaults like `max_eur`).
+
+## Layout
+
+Built with the [`shop-cli`](https://github.com/pmontp19/shop-cli-skill) process.
+
+```
+cmd/{{.Name}}/main.go        entrypoint (exit 0 on success, 1 on error)
+internal/client              transport: session cookies + auth headers
+internal/config              ~/.{{.Name}}/{session,config}.json (0600); env overlay
+internal/auth                JWT decode; <flow>
+internal/api                 typed operations + fixture round-trip tests
+internal/cli                 cobra commands + runtime + rendering
+docs/{{.Name}}-api-discovery.md   reverse-engineering notes
+```
+
+## Disclaimer
+
+This project is an **independent, unofficial** tool provided for **educational
+and research purposes only**.
+
+- **No affiliation.** Not affiliated with, endorsed by, or sponsored by
+  {{.Store}}. "{{.Store}}" and any product names, logos, or trademarks are
+  property of their respective owners and are referenced here solely to
+  describe compatibility.
+- **Reverse engineering.** The API surface used by this CLI was discovered
+  through reverse engineering (analysis of the official client's HTTP traffic).
+  No proprietary source code is included; only interoperability with the
+  public-facing HTTP endpoints the official clients already use.
+- **Use responsibly.** You are responsible for complying with the terms of
+  service of the platform, applicable law, and any rate limits. Do not use this
+  tool to abuse the service, scrape at scale, or automate in ways that impose
+  undue load. Keep request rates sane.
+
+If you represent the trademark holder and have concerns, please open an issue.
