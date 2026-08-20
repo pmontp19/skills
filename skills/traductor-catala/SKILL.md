@@ -188,6 +188,7 @@ Per volums grans, una sola passada no basta. Protocol que funciona:
 - [ ] **Sense coexistència tu/vós dins d'una mateixa cadena**: revisa clàusules unides per «o», «i», parèntesis
 - [ ] **Validació de fitxer**: `plutil -lint` (Apple), `msgfmt -c` (gettext), o l'eina pròpia del projecte passa sense errors
 - [ ] **Registre**: `utilitzar` per sobre de `fer servir` en UI formal; sense castellanismes ni calcs anglicistes
+- [ ] **Apòstrof consistent**: en fitxers de cadenes (JSON/PO/resx) usa l'apòstrof recte ('), no el tipogràfic (’); compta ocurrències de cada tipus al fitxer i normalitza cap a la forma majoritària ja establerta (vegeu `references/linguistic-rules.md`)
 
 ## Referències detallades
 
