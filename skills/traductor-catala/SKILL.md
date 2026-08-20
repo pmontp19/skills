@@ -2,7 +2,7 @@
 name: traductor-catala
 license: MIT
 description: >
-  Guia completa per traduir programari al català seguint els estàndards de Softcatalà, la Guia d'estil, les normes ISO i els recursos terminològics. Activa sempre que l'usuari demani traduir cadenes de text, missatges d'interfície, fitxers PO/POT, o qualsevol contingut de programari al català. També activa quan l'usuari vulgui revisar traduccions existents, comprovar si una traducció segueix els estàndards, pregunti sobre terminologia tecnològica en català, o necessiti ajuda amb decisions de localització (formats de data, números, tecles, etc.). Si l'usuari esmenta "softcatala", "po files", "gettext", "localització", "l10n", "i18n" en context català, usa aquesta skill. No esperis que l'usuari ho demani explícitament — si estàs traduint qualsevol cosa al català, aplica sempre aquestes normes.
+  Guia completa per traduir programari al català seguint els estàndards de Softcatalà, la Guia d'estil, les normes ISO i els recursos terminològics. Activa sempre que l'usuari demani traduir cadenes de text, missatges d'interfície, fitxers PO/POT, JSON de vue-i18n o qualsevol contingut de programari al català. També activa quan l'usuari vulgui revisar o auditar traduccions existents, comprovar si una traducció segueix els estàndards, pujar o preparar traduccions per a Weblate, pregunti sobre terminologia tecnològica en català, o necessiti ajuda amb decisions de localització (formats de data, números, tecles, etc.). Si l'usuari esmenta "softcatala", "po files", "gettext", "weblate", "json niuat", "vue-i18n", "localització", "l10n", "i18n" en context català, usa aquesta skill. No esperis que l'usuari ho demani explícitament — si estàs traduint qualsevol cosa al català, aplica sempre aquestes normes.
 ---
 
 # Traductor de Programari al Català
@@ -50,8 +50,14 @@ Quan facis un canvi en un fitxer, aplica'l **a tot el fitxer** i verifica-ho amb
 
 ### Validació de placeholders
 Compta sempre els marcadors de format - el nombre ha de coincidir entre original i traducció:
-- `%@`, `%d`, `%1$@`, `%2$s`, `\\(variable)` (Swift), `{0}`, `{name}` (.NET)
-- Compta abans i després; si difereixen, la traducció és incorrecta
+- `%@`, `%d`, `%1$@`, `%2$s`, `\\(variable)` (Swift), `{0}`, `{name}` (.NET/vue-i18n)
+- **Compara el multiconjunt (llista ordenada) de marcadors de l'EN actual vs la traducció**, no només el recompte: detecta placeholders renombrats o desapareguts quan l'original ha evolucionat. Una traducció amb `{remaining}` quan l'EN actual ja no el té és un error encara que el recompte quadri per altres vies.
+- **Plurals de vue-i18n**: les cadenes amb `|` separen formes plural ("Charger| Charger | {count} chargers"); mantén el mateix nombre de segments i els placeholders de cada segment.
+- No els tradueixis mai; manté l'ordre HTML/Markdown i les etiquetes d'escapament
+
+## Fitxers grans (centenars/milers de claus)
+
+Quan el volum supera el que pots traduir d'una tirada, canvia de mètode: pipeline per lots amb validació automàtica. Aplanat de JSON niuat, diff, lots per secció, merge amb prioritat de correccions, i gates finals. Detall complet a `references/large-files.md`.
 
 ## Workflow per traduir
 
@@ -62,6 +68,43 @@ Compta sempre els marcadors de format - el nombre ha de coincidir entre original
 5. **Verifica coherència**: El terme escollit és consistent amb traduccions anteriors del mateix programa?
 6. **Comprova localització**: Formats de data/hora/números correctes? (veure `references/localization.md`)
 7. **Si cal variant valenciana** (`ca@valencia`): usa l'[adaptador de Softvalencia](https://www.softvalencia.org/adaptador/) sobre el text en català central
+
+## Traducció via plataformes (Weblate i similars)
+
+Molts projectes open source (evcc, i molts més) **només accepten traduccions via Weblate** i rebutgen PRs directes als fitxers d'i18n per evitar conflictes amb el sync automàtic. Abans de contribuir, esbrina el flux del projecte (CONTRIBUTING.md, issue històrics de traducció).
+
+Regles clau quan el projecte usa Weblate:
+
+- **Baixa sempre el fitxer de Weblate, mai del repo git**: l'estat de Weblate pot portar hores o dies d'avantatge (traduccions pendents de commit/push). Traduir sobre el fitxer del repo perd feina aliena i crea conflictes.
+- **La referència semàntica és sempre l'anglès actual**: si una traducció existent divergeix de l'EN (perquè l'EN ha evolucionat), corregir-la és feina teva, no "respectar l'existent". Passa sovint amb placeholders desapareguts.
+- **Upload**: cal compte registrat. Amb permisos de translator veus el botó d'upload; en mode suggest només pots proposar cadena a cadena (inviable per volums grans). Modes: "Add as translation" aplica directament; "Add as suggestion" requereix revisió humana; "Add as translation needing edit" és el terme mitjà. Marca "Change translated strings" per sobreescriure correccions.
+- **Contribucions grans + IA**: molts projectes tenen polítiques d'IA (entesa prèvia, consens via discussió/Discord abans d'aportacions massives). Anuncia una aportació de centenars de cadenes abans de fer-la; després del push de Weblate es revisa al repo.
+
+## Auditoria de traduccions existents
+
+Quan et donen un fitxer ja parcialment traduït, la feina és meitat traducció meitat auditoria:
+
+1. **Aplana i dif** contra l'original anglès: faltants, extres (obsoletes), i percentatge real. L'% de Weblate pot comptar "needs editing" com a traduït.
+2. **Senyals de sospita** (grep ràpid): castellanismes lèxics (Período, Corriente, medidor), typos amb accents, tractament tu en fitxers que van en vós, coexistència d'estils de botó.
+3. **Dump EN|CA costat a costat** i llegeix-lo per seccions: la divergència semàntica fina (significat canviat, matisos perduts) no es troba amb regex, es troba llegint. Vigila especialment claus antigues que ningú ha tocat: és on s'amaguen traduccions d'una altra llengua, significats obsolets i placeholders de versions anteriors de l'EN.
+4. Correccions com a bloc apart, per aplicar-les amb prioritat sobre la resta del merge.
+
+## Revisió multipassada (traduccions assistides)
+
+Per volums grans, una sola passada no basta. Protocol que funciona:
+
+1. **Passada 1**: traducció + autocorrecció amb gates scriptables (placeholders, claus, tu/vós, castellanismes per regex).
+2. **Passada 2**: subagent amb context fresc (sense la teva memòria de traductor) fent de revisor adversarial: ha de retornar informe prioritzat (bloquejants/greus/menors) amb clau+actual+proposta.
+3. **Verifica cada proposta contra l'EN abans d'aplicar-la**: el revisor també s'equivoca (confon claus semblants, proposa correccions sobre un EN que ha canviat). Cap proposta s'aplica sense verificar l'original anglès.
+4. **Passada 3** si cal: revisor diferent enfocat en semàntica fina, nativitat i coherència entre seccions (allò que les regex no veuen). Punt de rendiment decreient: si la passada 3 només troba cosmètica, atura't.
+
+## Glossari de decisions del projecte
+
+"Un terme, una traducció" necessita un mecanisme, no només una bona intenció:
+
+- En començar, decideix els termes troncals del domini (carregador, comptador, testimoni...) i **apunta'ls en un glossari local** (fitxer o comentari al marge) a mesura que tradueixes.
+- Si canvies un terme o registre a mig camí, update el glossari i re-aplica a tot el fitxer.
+- Abans de lliurar: `grep -i` de cada terme descartat ha de retornar 0. Els dobles freqüents que cal caçar: comptador/mesurador, bloquejar/blocar, aparellar/enllaçar, testimoni/token, debat/discussió, suprimir/borrar, bateria domèstica/de casa.
 
 ## Regles ràpides per a elements UI
 
@@ -129,6 +172,11 @@ Compta sempre els marcadors de format - el nombre ha de coincidir entre original
 | remove | remoure | elimina / suprimeix |
 | link | vincle (en web) | enllaç (web) / vincle (en doc) |
 | exit | èxit (l'aplicació) | surt / sortiu (menú, segons estil tu/vós) / sortida (cmd) |
+| about | Sobre | Quant a |
+| pair (dispositius) | enllaçar / lligar | aparellar (aparellament) |
+| attach (correu) | Aneu/Posa el fitxer | Adjunta/Adjunteu el fitxer |
+| session (càrrega/login) | procés | sessió |
+| redact (dades) | redactar | ocultar / censurar |
 
 ## Checklist de revisió abans de lliurar una PR de localització
 
@@ -147,3 +195,4 @@ Compta sempre els marcadors de format - el nombre ha de coincidir entre original
 - `references/format-conventions.md` — Tipografia, guillemets, guions, sigles, símbols
 - `references/localization.md` — Formats de data, hora, números, moneda, telèfon, unitats
 - `references/terminology.md` — Recursos terminològics: TERMCAT, glossaris, memòries de traducció
+- `references/large-files.md` — Pipeline per traduir fitxers de centenars/milers de claus per lots
