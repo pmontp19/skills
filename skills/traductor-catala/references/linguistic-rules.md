@@ -139,8 +139,15 @@ Preferir veu activa. Convertir passives quan és possible:
 | xarxa local (red local) | xarxa local ✓ |
 | ha (preposició) | a |
 | cerca/recerca confosos | cerca (acció), recerca (investigació) |
-| apòstrof tipogràfic dret (') | apòstrof tipogràfic corbat (') |
 | punt volat mal usat (·) | punt volat per a l·l: "col·leccions" |
+
+### Apòstrof: recte (') vs. tipogràfic (’)
+
+Softcatalà prefereix l'apòstrof tipogràfic/corbat (**’**, U+2019) sobre el recte de màquina d'escriure (**'**, U+0027) en **text de lectura** (documentació, pàgines web, prosa): és la forma correcta per a l'elisió en tipografia professional, coherent visualment amb cometes tipogràfiques (" ") o guillemets («»).
+
+**Excepció important per a fitxers de programari (el cas d'aquesta skill)**: per a contingut destinat a **codi font, fitxers de cadenes (JSON, PO, resx...) o gestors de continguts**, cal fer servir l'apòstrof **recte** ('). No és una simplificació de segona categoria: és la recomanació correcta per a aquest context, perquè evita problemes de compatibilitat/renderització entre fonts, plataformes i eines de compilació, i és el que la majoria d'ecosistemes de traducció ja fan servir de manera consistent.
+
+**Regla pràctica**: si estàs traduint una cadena d'interfície o un fitxer de localització, usa l'apòstrof recte ('); si estàs escrivint documentació o text en prosa per llegir, usa el tipogràfic (’). Dins d'un mateix fitxer de cadenes, sigues consistent amb la forma predominant que ja hi hagi (si el fitxer té una barreja, compta ocurrències i normalitza cap a la majoritària).
 
 ## Errors gramaticals freqüents
 
